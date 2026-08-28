@@ -1,0 +1,4 @@
+Total Number of Trainable Parameters: 847980
+	Total sub-Model Trainable Parameters: 763260
+		-Number of Trainable Parameters per sub-Model: 254420
+	Number of Trainable Parameters in Readout Block: 84720

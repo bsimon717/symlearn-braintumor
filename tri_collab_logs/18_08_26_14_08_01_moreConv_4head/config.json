@@ -1,0 +1,22 @@
+{
+    "models": {
+        "ABC": {
+            "kernel_size": 16,
+            "kernel_stride": 2,
+            "num_fc": 3,
+            "out_channels": 32
+        },
+        "Readout": {
+            "num_heads": 4,
+            "readout_hidden_dim": 32
+        }
+    },
+    "training": {
+        "batch_size": 32,
+        "contrastive": true,
+        "epochs": 300,
+        "lamb": 10.0,
+        "temp": 3.0,
+        "uplift": 100
+    }
+}
