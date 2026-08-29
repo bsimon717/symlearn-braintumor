@@ -1,4 +1,5 @@
 import os
+import torch.multiprocessing as multiprocessing
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -437,4 +438,5 @@ def main():
     return
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method('spawn')
     main()

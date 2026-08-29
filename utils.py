@@ -1,5 +1,7 @@
+from functools import partial
 import numpy as np
 import torch
+from torch._higher_order_ops import map
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -12,6 +14,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch.optim as optim
 from sklearn.metrics import accuracy_score
+import torch.multiprocessing as multiprocessing
+TORCHDYNAMO_VERBOSE=1
 
 def epoch_summary(reports, epoch, tags, label_lookup):
     print(f'Summary:')
@@ -50,16 +54,26 @@ def embed_sim(x1, x2):
 
     return (cosine_sim+1)/2
 
-def contrastive_loss(src, auxs, delta=0.5):
+def embed_summand(src, aux, delta=0.5):
+    return torch.exp( (1/delta)*embed_sim(src, aux) ) - 1
 
-    aux1, aux2 = auxs
+def embed_loss(src, auxs):
+    num_aux = len(auxs)
+    temp_func = lambda aux: embed_summand(src, aux)
+    temp_func = torch.vmap(temp_func)
 
-    term1 = torch.exp( (1/delta)*embed_sim(src, aux1) )
-    term2 = torch.exp( (1/delta)*embed_sim(src, aux2) )
+    auxs = torch.stack(auxs)
 
-    L = 0.5*(term1 + term2 - 2)
-    return L.mean()
+    sum_terms = temp_func(auxs)
 
+    sum_terms = torch.sum(sum_terms, dim=0)
+
+    pre_factor = 1/num_aux
+
+    L_embed = pre_factor*sum_terms
+
+    return L_embed.mean()
+    
 def train_one_epoch(train_loader, models, opts, scheds, readout, opt_F, sched_F, collab_params, temp, epoch, uplift=10, eps=1e-7, lamb=1.0, contrastive=False):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -151,9 +165,9 @@ def train_one_epoch(train_loader, models, opts, scheds, readout, opt_F, sched_F,
         L_tot_C = ( (1-gamma)*L_C + gamma*(L_A+L_B) )
 
         if contrastive:
-            L_con_A = contrastive_loss(ind_A.clone(), (ind_B.clone(), ind_C.clone()))
-            L_con_B = contrastive_loss(ind_B.clone(), (ind_A.clone(), ind_C.clone()))
-            L_con_C = contrastive_loss(ind_C.clone(), (ind_A.clone(), ind_B.clone()))
+            L_con_A = embed_loss(ind_A.clone(), [ind_B.clone(), ind_C.clone()])
+            L_con_B = embed_loss(ind_B.clone(), [ind_A.clone(), ind_C.clone()])
+            L_con_C = embed_loss(ind_C.clone(), [ind_A.clone(), ind_B.clone()])
 
             con_A.append(float(L_con_A.clone().detach().cpu()))
             con_B.append(float(L_con_B.clone().detach().cpu()))
@@ -326,9 +340,9 @@ def eval_one_epoch(eval_loader, models, readout, collab_params, temp, epoch, upl
             L_tot_C = ( (1-gamma)*L_C + gamma*(L_A+L_B) )
 
             if contrastive:
-                L_con_A = contrastive_loss(ind_A.clone(), (ind_B.clone(), ind_C.clone()))
-                L_con_B = contrastive_loss(ind_B.clone(), (ind_A.clone(), ind_C.clone()))
-                L_con_C = contrastive_loss(ind_C.clone(), (ind_A.clone(), ind_B.clone()))
+                L_con_A = embed_loss(ind_A.clone(), (ind_B.clone(), ind_C.clone()))
+                L_con_B = embed_loss(ind_B.clone(), (ind_A.clone(), ind_C.clone()))
+                L_con_C = embed_loss(ind_C.clone(), (ind_A.clone(), ind_B.clone()))
     
                 con_A.append(float(L_con_A.clone().detach().cpu()))
                 con_B.append(float(L_con_B.clone().detach().cpu()))
