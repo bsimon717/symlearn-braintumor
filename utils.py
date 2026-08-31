@@ -15,28 +15,27 @@ from tqdm import tqdm
 import torch.optim as optim
 from sklearn.metrics import accuracy_score
 import torch.multiprocessing as multiprocessing
-TORCHDYNAMO_VERBOSE=1
 
 def epoch_summary(reports, epoch, tags, label_lookup):
     print(f'Summary:')
     for i, report in enumerate(reports):
         tag = tags[i]
 
-        if tag == 'Readout' and len(report) == 0:
-            continue
-        
         print(f'\t- {tag}:')
         for label in report.keys():
-            if label != 'accuracy':
-                print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
+            if report[label] == None:
+                continue
             else:
-                print()
-                print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
+                if label != 'accuracy':
+                    print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
+                else:
+                    print()
+                    print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
         print()
 
     return
 
-def fill_lt_reports(lt_reports, reports, phase, epoch, uplift, lamb):
+def fill_lt_reports(lt_reports, reports, phase):
 
     for lt_report, report in zip(lt_reports, reports):
             keys = list(report.keys())
@@ -49,9 +48,7 @@ def fill_lt_reports(lt_reports, reports, phase, epoch, uplift, lamb):
     return
     
 def embed_sim(x1, x2):
-
-    cosine_sim = F.cosine_similarity(x1, x2)
-
+    cosine_sim = F.cosine_similarity(x1, x2, dim=0)
     return (cosine_sim+1)/2
 
 def embed_summand(src, aux, delta=0.5):
@@ -73,357 +70,228 @@ def embed_loss(src, auxs):
     L_embed = pre_factor*sum_terms
 
     return L_embed.mean()
-    
-def train_one_epoch(train_loader, models, opts, scheds, readout, opt_F, sched_F, collab_params, temp, epoch, uplift=10, eps=1e-7, lamb=1.0, contrastive=False):
+
+def train_one_epoch(train_loader, models, opts, scheds, collab_params, temp, epoch, criterion, uplift=10, eps=1e-7, lamb=1.0):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    criterion = nn.CrossEntropyLoss()
 
-    report_A = {}
-    report_B = {}
-    report_C = {}
+    reports = [{} for model in models]
+    personals = [[] for model in models]
+    embs = [[] for model in models[:-1]]
+    blames = [[] for model in models[:-1]]
+    syms = [[] for model in models]
     
-    personal_A = []
-    personal_B = []
-    personal_C = []
+    for model in models:
+        model.train()
 
-    if contrastive:
-        con_A = []
-        con_B = []
-        con_C = []
-
-    if lamb > 0.0:
-        blame_A = []
-        blame_B = []
-        blame_C = []
-    
-    tot_A = []
-    tot_B = []
-    tot_C = []
-
-    
-    model_A, model_B, model_C, = models
-    
-    model_A.train()
-    model_B.train()
-    model_C.train()
-    
-    opt_A, opt_B, opt_C = opts
-    sched_A, sched_B, sched_C, = scheds
-    alpha, beta, gamma = collab_params
-
-    personal_F = []
-    tot_F = []
-    report_F = {}
-    readout.train()
-    
+    ## TRAINING LOOP
     pbar_train = tqdm(train_loader, total=len(train_loader))
     pbar_train.set_description(f'Epoch {epoch}: Training')
     for img, label in pbar_train:
-        
-        opt_A.zero_grad()
-        opt_B.zero_grad()
-        opt_C.zero_grad()
-        
+        for opt in opts:
+            opt.zero_grad()
+
         img = img.to(device)
-        
-        ind_A = model_A.embed(img)
-        ind_B = model_B.embed(img)
-        ind_C = model_C.embed(img)
-            
-        ind_concat = torch.cat([ind_A, ind_B, ind_C], dim=1)
 
-        logits_A = model_A(ind_concat).clone().cpu()
-        logits_B = model_B(ind_concat).clone().cpu()
-        logits_C = model_C(ind_concat).clone().cpu()
+        ind_concat = torch.cat([model.embed(img) for model in models[:-1]], dim=1)
         
-        probs_A = F.softmax(logits_A.clone().detach(), dim=-1).to('cpu')
-        pred_A = torch.argmax(probs_A.clone().detach(), dim=1)
+        logits_list = [model(ind_concat.clone()).clone().cpu() for model in models[:-1]]
+        
+        probs_list = [F.softmax(logits.clone().detach(),dim=-1).to('cpu') for logits in logits_list]
+        preds_list = [torch.argmax(probs.clone().detach(),dim=1) for probs in probs_list]
+        
+        L_is = []
+        L_emb_is = []
+        for i, personal in enumerate(personals[:-1]):
+            L_i = criterion(logits_list[i], label)
+            L_is.append(L_i)
+            personal.append(float(L_i.clone().detach()))
 
-        L_A = criterion(logits_A, label)
-        personal_A.append(float(L_A.clone().detach()))
+            src = ind_concat[i].clone()
+            auxs = [ind_concat[i].clone() for i in range(len(ind_concat))]
+            auxs.pop(i)
+            L_emb_i = embed_loss(src, auxs).cpu()
+            L_emb_is.append(L_emb_i)
+            embs[i].append(float(L_emb_i.clone().detach()))
         
-        probs_B = F.softmax(logits_B, dim=-1).to('cpu')
-        pred_B = torch.argmax(probs_B, dim=1)
-        L_B = criterion(logits_B, label)
-        personal_B.append(float(L_B.clone().detach()))
+        L_i_tensor = torch.stack(L_is)
+        L_emb_tensor = torch.stack(L_emb_is)
         
-        probs_C = F.softmax(logits_C, dim=-1).to('cpu')
-        pred_C = torch.argmax(probs_C, dim=1)
-        L_C = criterion(logits_C, label)
-        personal_C.append(float(L_C.clone().detach()))
+        L_syms = []
+        for i in range(len(L_is)):
+            param = collab_params[i]
+            aux_idxs = [j!=i for j in range(len(L_is))]
+            aux_L = L_i_tensor.clone()[aux_idxs]
 
-        ## Note: L_A, L_B, and L_C are all funtions of the parameters of each of A_e, B_e, C_e.
-        
-        ## As such, when the gradient of L_tot_A is calculated, for example, the parameters updated by its contribution
-        ## dependent on L_B and L_C are specifically the learnable parameters of A_e. Thus, collab parameters can be thought of
-        ## determining how much an individual model should be focusing on refining its initial embedding block,
-        ## specifically towards the aim of improving the performance of the other models.
-        
-        L_tot_A = ( (1-alpha)*L_A + alpha*(L_B+L_C) )
-        L_tot_B = ( (1-beta)*L_B + beta*(L_A+L_C) )
-        L_tot_C = ( (1-gamma)*L_C + gamma*(L_A+L_B) )
+            L_sym_i = (1-param)*L_i_tensor[i] + param*torch.sum(aux_L) + (param**2)*L_emb_tensor[i]
 
-        if contrastive:
-            L_con_A = embed_loss(ind_A.clone(), [ind_B.clone(), ind_C.clone()])
-            L_con_B = embed_loss(ind_B.clone(), [ind_A.clone(), ind_C.clone()])
-            L_con_C = embed_loss(ind_C.clone(), [ind_A.clone(), ind_B.clone()])
-
-            con_A.append(float(L_con_A.clone().detach().cpu()))
-            con_B.append(float(L_con_B.clone().detach().cpu()))
-            con_C.append(float(L_con_C.clone().detach().cpu()))
-            
-            L_tot_A = L_tot_A + (alpha**2)*L_con_A
-            L_tot_B = L_tot_B + (beta**2)*L_con_B
-            L_tot_C = L_tot_C + (gamma**2)*L_con_C
+            L_syms.append(L_sym_i)
 
         if epoch >= uplift:
-            opt_F.zero_grad()
-            
-            input_from_ABC = torch.cat([logits_A.clone(), logits_B.clone(), logits_C.clone()], dim=1).to(device)
+            upstream_input = torch.cat(logits_list, dim=1).to(device)
 
-            final_logits = readout(input_from_ABC, ind_concat.clone()).to('cpu')
-            
-            final_probs = F.softmax(final_logits.clone(), dim=-1).to('cpu')
-            final_pred = torch.argmax(final_probs, dim=1)
+            final_logits = models[-1](upstream_input, ind_concat.clone()).to('cpu')
+            final_probs = F.softmax(final_logits.clone(), dim=-1)
+            final_preds = torch.argmax(final_probs, dim=1)
 
             L_F = criterion(final_logits, label)
-            personal_F.append(float(L_F.clone().detach()))
+            personals[-1].append(float(L_F.clone().detach()))
 
-            L_sum = (eps+L_A.clone().detach() + L_B.clone().detach() + L_C.clone().detach())
+            L_up_sum = eps + torch.sum(L_i_tensor).detach()
+
+            L_sym_F = L_F*(1+torch.exp(eps-temp*L_up_sum))
+            L_syms.append(L_sym_F)
+
+            for i, L_i in enumerate(L_i_tensor.clone().detach()):
+                L_blame_i = lamb*(L_i/L_up_sum)*L_F.clone()
+                blames[i].append(float(L_blame_i.clone().detach()))
+                L_syms[i] = L_syms[i] + L_blame_i
+
+        for i, L_sym_i in enumerate(L_syms):
+            syms[i].append(float(L_sym_i.clone().detach()))
+            if i != len(L_syms):
+                L_sym_i.backward(retain_graph=True)
+            else:
+                L_sym_i.backward()
             
-            L_tot_F = L_F*( 1+torch.exp(eps-temp*(L_sum)) )
-            tot_F.append(float(L_tot_F.clone().detach()))
-
-            if lamb > 0.0:
-
-                L_blame_A = lamb*( L_A.clone().detach()/L_sum )*L_F.clone()
-                L_blame_B = lamb*( L_B.clone().detach()/L_sum )*L_F.clone()
-                L_blame_C = lamb*( L_C.clone().detach()/L_sum )*L_F.clone()
-                
-                L_tot_A = L_tot_A + L_blame_A
-                L_tot_B = L_tot_B + L_blame_B
-                L_tot_C = L_tot_C + L_blame_C
-
-                blame_A.append(float(L_blame_A.clone().detach()))
-                blame_B.append(float(L_blame_B.clone().detach()))
-                blame_C.append(float(L_blame_C.clone().detach()))
-
-        tot_A.append(float(L_tot_A.clone().detach()))
-        tot_B.append(float(L_tot_B.clone().detach()))
-        tot_C.append(float(L_tot_C.clone().detach()))
-        
-        if epoch >= uplift: 
-            L_tot_F.backward(retain_graph=True)
-        L_tot_A.backward(retain_graph=True)
-        L_tot_B.backward(retain_graph=True)
-        L_tot_C.backward()
+        for i in range(len(syms)-1):
+            opts[i].step()
+            scheds[i].step()
 
         if epoch >= uplift:
-            opt_F.step()
-            sched_F.step()
-        opt_A.step()
-        sched_A.step()
-        opt_B.step()
-        sched_B.step()
-        opt_C.step()
-        sched_C.step()
+            opts[-1].step()
+            scheds[-1].step()
         
-    report_A['total'] = np.mean(tot_A)
-    report_A['personal'] = np.mean(personal_A)
-    
-    report_B['total'] = np.mean(tot_B)
-    report_B['personal'] = np.mean(personal_B)
-    
-    report_C['total'] = np.mean(tot_C)
-    report_C['personal'] = np.mean(personal_C)
-
-    if contrastive:
-        report_A['contrastive'] = np.mean(con_A)
-        report_B['contrastive'] = np.mean(con_B)
-        report_C['contrastive'] = np.mean(con_C)
-
-    if epoch >= uplift:
-        report_F['total'] = np.mean(tot_F)
-        report_F['personal'] = np.mean(personal_F)
-        if lamb > 0.0:
-            report_A['blame'] = np.mean(blame_A)
-            report_B['blame'] = np.mean(blame_B)
-            report_C['blame'] = np.mean(blame_C)
+    ## FILL REPORTS
+    for i, report in enumerate(reports):
         
-    return report_A, report_B, report_C, report_F
+        if i != len(reports)-1:
+            report['personal'] = np.mean(personals[i])
+            report['embedding']= np.mean(embs[i])
+            if epoch >= uplift:
+                report['blame'] = np.mean(blames[i])
+            else:
+                report['blame'] = None
+                
+            report['symbiotic'] = np.mean(syms[i])
+        else:
+            if epoch >= uplift:
+                report['personal'] = np.mean(personals[i])
+                report['symbiotic'] = np.mean(syms[i])
+            else:
+                report['personal'] = None
+                report['symbiotic'] = None
+    
+    return reports
+            
+def eval_one_epoch(eval_loader, models, collab_params, temp, epoch, criterion, uplift=10, eps=1e-7, lamb=1.0, phase='Validation'):
 
-def eval_one_epoch(eval_loader, models, readout, collab_params, temp, epoch, uplift=10, eps=1e-7, contrastive=False, phase='Validation', lamb=1.0):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    criterion = nn.CrossEntropyLoss()
-    
-    personal_A = []
-    personal_B = []
-    personal_C = []
-    
-    tot_A = []
-    tot_B = []
-    tot_C = []
 
-    preds_A = []
-    preds_B = []
-    preds_C = []
+    reports = [{} for model in models]
+    personals = [[] for model in models]
+    embs = [[] for model in models[:-1]]
+    blames = [[] for model in models[:-1]]
+    syms = [[] for model in models]
+    preds = [[] for model in models]
+    
+    for model in models:
+        model.eval()
 
-    report_A = {}
-    report_B = {}
-    report_C = {}
-    
-    if contrastive:
-        con_A = []
-        con_B = []
-        con_C = []
-
-    if lamb > 0.0:
-        blame_A = []
-        blame_B = []
-        blame_C = []
-        
-    model_A, model_B, model_C, = models
-    
-    model_A.eval()
-    model_B.eval()
-    model_C.eval()
-    
-    alpha, beta, gamma = collab_params
-    
-    personal_F = []
-    tot_F = []
-    report_F = {}
-    preds_F = []
-    readout.eval()
-        
     all_labels = []
     
+    ## VALIDATION LOOP
     pbar_eval = tqdm(eval_loader, total=len(eval_loader))
     pbar_eval.set_description(f'Epoch {epoch}: {phase}')
     with torch.no_grad():
         for img, label in pbar_eval:
-            
+    
             img = img.to(device)
-            all_labels += list(label)
+            all_labels += label.tolist()
             
-            ind_A = model_A.embed(img)
-            ind_B = model_B.embed(img)
-            ind_C = model_C.embed(img)
-    
-            ind_concat = torch.cat([ind_A, ind_B, ind_C], dim=1)
-    
-            logits_A = model_A(ind_concat).clone().cpu()
-            logits_B = model_B(ind_concat).clone().cpu()
-            logits_C = model_C(ind_concat).clone().cpu()
-    
-            probs_A = F.softmax(logits_A, dim=-1).to('cpu')
-            pred_A = torch.argmax(probs_A, dim=1)
-            L_A = criterion(logits_A, label)
-            preds_A += list(pred_A)
-            personal_A.append(float(L_A.clone().detach()))
+            ind_concat = torch.cat([model.embed(img) for model in models[:-1]], dim=1)
+            logits_list = [model(ind_concat.clone()).clone().cpu() for model in models[:-1]]
             
-            probs_B = F.softmax(logits_B, dim=-1).to('cpu')
-            pred_B = torch.argmax(probs_B, dim=1)
-            L_B = criterion(logits_B, label)
-            preds_B += list(pred_B)
-            personal_B.append(float(L_B.clone().detach()))
+            probs_list = [F.softmax(logits.clone(),dim=-1).to('cpu') for logits in logits_list]
+            preds_list = [torch.argmax(probs.clone(),dim=1).tolist() for probs in probs_list]
             
-            probs_C = F.softmax(logits_C, dim=-1).to('cpu')
-            pred_C = torch.argmax(probs_C, dim=1)
-            L_C = criterion(logits_C, label)
-            preds_C += list(pred_C)
-            personal_C.append(float(L_C.clone().detach()))
-    
-            L_tot_A = ( (1-alpha)*L_A + alpha*(L_B+L_C) )
-            L_tot_B = ( (1-beta)*L_B + beta*(L_A+L_C) )
-            L_tot_C = ( (1-gamma)*L_C + gamma*(L_A+L_B) )
+            L_is = []
+            L_emb_is = []
+            for i, personal in enumerate(personals[:-1]):
+                L_i = criterion(logits_list[i], label)
+                L_is.append(L_i)
+                personal.append(float(L_i.clone()))
 
-            if contrastive:
-                L_con_A = embed_loss(ind_A.clone(), (ind_B.clone(), ind_C.clone()))
-                L_con_B = embed_loss(ind_B.clone(), (ind_A.clone(), ind_C.clone()))
-                L_con_C = embed_loss(ind_C.clone(), (ind_A.clone(), ind_B.clone()))
-    
-                con_A.append(float(L_con_A.clone().detach().cpu()))
-                con_B.append(float(L_con_B.clone().detach().cpu()))
-                con_C.append(float(L_con_C.clone().detach().cpu()))
+                preds[i] += preds_list[i]
                 
-                L_tot_A = L_tot_A + (alpha**2)*L_con_A
-                L_tot_B = L_tot_B + (beta**2)*L_con_B
-                L_tot_C = L_tot_C + (gamma**2)*L_con_C
+                src = ind_concat[i].clone()
+                auxs = [ind_concat[i].clone() for i in range(len(ind_concat))]
+                auxs.pop(i)
+                L_emb_i = embed_loss(src, auxs).cpu()
+                L_emb_is.append(L_emb_i)
+                embs[i].append(float(L_emb_i.clone()))
             
-            tot_A.append(float(L_tot_A.clone().detach()))
-            tot_B.append(float(L_tot_B.clone().detach()))
-            tot_C.append(float(L_tot_C.clone().detach()))
+            L_i_tensor = torch.stack(L_is)
+            L_emb_tensor = torch.stack(L_emb_is)
+            
+            L_syms = []
+            for i in range(len(L_is)):
+                param = collab_params[i]
+                aux_idxs = [j!=i for j in range(len(L_is))]
+                aux_L = L_i_tensor.clone()[aux_idxs]
+    
+                L_sym_i = (1-param)*L_i_tensor[i] + param*torch.sum(aux_L) + (param**2)*L_emb_tensor[i]
+    
+                L_syms.append(L_sym_i)
     
             if epoch >= uplift:
-                L_sum = (eps+L_A.clone().detach() + L_B.clone().detach() + L_C.clone().detach())
-                
-                input_from_ABC = torch.cat( [logits_A.clone(), logits_B.clone(), logits_C.clone()], dim=1).to(device)
+                upstream_input = torch.cat(logits_list, dim=1).to(device)
     
-                final_logits = readout(input_from_ABC, ind_concat.clone()).cpu()
-                final_probs = F.softmax(final_logits, dim=-1).to('cpu')
-                final_pred = torch.argmax(final_probs, dim=1)
-                preds_F += list(final_pred)
+                final_logits = models[-1](upstream_input, ind_concat.clone()).to('cpu')
+                final_probs = F.softmax(final_logits.clone(), dim=-1)
+                final_preds = torch.argmax(final_probs, dim=1).tolist()
+                preds[-1] += final_preds
                 
                 L_F = criterion(final_logits, label)
-                personal_F.append(float(L_F.clone().detach()))
-                
-                L_tot_F = L_F*( 1+torch.exp(eps-temp*(L_sum)) )
-                tot_F.append(float(L_tot_F.clone().detach()))
-
-                if lamb > 0.0:
-
-                    L_blame_A = lamb*( L_A.clone().detach()/L_sum )*L_F.clone()
-                    L_blame_B = lamb*( L_B.clone().detach()/L_sum )*L_F.clone()
-                    L_blame_C = lamb*( L_C.clone().detach()/L_sum )*L_F.clone()
-                    
-                    L_tot_A = L_tot_A + L_blame_A
-                    L_tot_B = L_tot_B + L_blame_B
-                    L_tot_C = L_tot_C + L_blame_C
+                personals[-1].append(float(L_F.clone()))
     
-                    blame_A.append(float(L_blame_A.clone().detach()))
-                    blame_B.append(float(L_blame_B.clone().detach()))
-                    blame_C.append(float(L_blame_C.clone().detach()))
-
-                
-    acc_A = accuracy_score(all_labels, preds_A)
-    acc_B = accuracy_score(all_labels, preds_B)
-    acc_C = accuracy_score(all_labels, preds_C)
-
-    if epoch >= uplift:
-        acc_F = accuracy_score(all_labels, preds_F)
-    else:
-        acc_F = None
-
-    report_A['total'] = np.mean(tot_A)
-    report_A['personal'] = np.mean(personal_A)
-
-    report_B['total'] = np.mean(tot_B)
-    report_B['personal'] = np.mean(personal_B)
-
-    report_C['total'] = np.mean(tot_C)
-    report_C['personal'] = np.mean(personal_C)
+                L_up_sum = eps + torch.sum(L_i_tensor)
     
-    if contrastive:
-        report_A['contrastive'] = np.mean(con_A)
-        report_B['contrastive'] = np.mean(con_B)
-        report_C['contrastive'] = np.mean(con_C)
+                L_sym_F = L_F*(1+torch.exp(eps-temp*L_up_sum))
+                L_syms.append(L_sym_F)
+    
+                for i, L_i in enumerate(L_i_tensor.clone()):
+                    L_blame_i = lamb*(L_i/L_up_sum)*L_F.clone()
+                    blames[i].append(float(L_blame_i.clone()))
+                    L_syms[i] = L_syms[i] + L_blame_i
+    
+            for i, L_sym_i in enumerate(L_syms):
+                syms[i].append(float(L_sym_i.clone()))
+
+    ## FILL REPORTS
+    for i, report in enumerate(reports):
         
-    if epoch >= uplift:
-        report_F['total'] = np.mean(tot_F)
-        report_F['personal'] = np.mean(personal_F)
-        report_F['accuracy'] = acc_F
-        if lamb > 0.0:
-            report_A['blame'] = np.mean(blame_A)
-            report_B['blame'] = np.mean(blame_B)
-            report_C['blame'] = np.mean(blame_C)
-
-    report_A['accuracy'] = acc_A
-    report_B['accuracy'] = acc_B
-    report_C['accuracy'] = acc_C
+        if i != len(reports)-1:
+            report['personal'] = np.mean(personals[i])
+            report['embedding']= np.mean(embs[i])
+            if epoch >= uplift:
+                report['blame'] = np.mean(blames[i])
+            else:
+                report['blame'] = None
+                
+            report['symbiotic'] = np.mean(syms[i])
+            report['accuracy'] = accuracy_score(all_labels, preds[i])
+        else:
+            if epoch >= uplift:
+                report['personal'] = np.mean(personals[i])
+                report['symbiotic'] = np.mean(syms[i])
+                report['accuracy'] = accuracy_score(all_labels, preds[i])
+            else:
+                report['personal'] = None
+                report['symbiotic'] = None
+                report['accuracy'] = None
     
-    return report_A, report_B, report_C, report_F
+    return reports
 
 def get_data_loaders(batch_size):
 

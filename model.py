@@ -3,39 +3,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SimpleCNN(nn.Module):
-    def __init__(self, input_dim=224, num_classes=4, kernel_size=4, kernel_stride=4, in_channels=1, out_channels=8, padding=0, hidden_dim=128, num_fc=1, aux_embeds=False):
+    def __init__(self, input_dim=224, num_classes=4, kernel_size=4, kernel_stride=4, in_channels=1, conv_channels=8, out_channels=128, padding=0, hidden_dim=128, num_fc=1, num_preR=3):
         super(SimpleCNN, self).__init__()
 
         self.input_dim = input_dim
         self.kernel_size = kernel_size
         self.in_channels = in_channels
+        self.conv_channels = conv_channels
         self.out_channels = out_channels
         self.padding = padding
         self.hidden_dim = hidden_dim
         self.kernel_stride = kernel_stride
-        self.aux_embeds = aux_embeds
+        self.num_preR = num_preR
         self.num_fc = num_fc
         
         self.batch_norm = nn.BatchNorm2d(self.in_channels, affine=False)
         
-        self.conv1 = nn.Conv2d(in_channels=self.in_channels, out_channels=self.out_channels, kernel_size=self.kernel_size, padding=self.padding, stride=self.kernel_stride)  
-        self.conv2 = nn.Conv2d(in_channels=self.out_channels, out_channels=self.out_channels//2, kernel_size=self.kernel_size, padding=self.padding, stride=self.kernel_stride)
-        self.conv3 = nn.Conv2d(in_channels=self.out_channels//2, out_channels=self.out_channels, kernel_size=6, padding=self.padding, stride=self.kernel_stride)
+        self.conv1 = nn.Conv2d(in_channels=self.in_channels, out_channels=self.conv_channels, kernel_size=self.kernel_size, padding=self.padding, stride=self.kernel_stride)  
+        self.conv2 = nn.Conv2d(in_channels=self.conv_channels, out_channels=self.conv_channels//2, kernel_size=self.kernel_size, padding=self.padding, stride=self.kernel_stride)
+        self.conv3 = nn.Conv2d(in_channels=self.conv_channels//2, out_channels=self.conv_channels, kernel_size=6, padding=self.padding, stride=self.kernel_stride)
         
         self.pool = lambda x: torch.mean(x, dim=1)
         
-        self.fc = nn.Linear(484, 128)
+        self.fc = nn.Linear(484,self.out_channels)
 
         if self.num_fc > 1:
-            self.linears = nn.ModuleList([nn.Linear(128, 128) for i in range(self.num_fc-1)])
+            self.linears = nn.ModuleList([nn.Linear(self.out_channels, self.out_channels) for i in range(self.num_fc-1)])
         
         nn.init.kaiming_normal_(self.fc.weight, nonlinearity='leaky_relu')
         nn.init.zeros_(self.fc.bias)
         
-        if self.aux_embeds==False:
-            self.out = nn.Linear(128, num_classes)
-        else:
-            self.out = nn.Linear(128*3, num_classes)
+        self.out = nn.Linear(self.out_channels*self.num_preR, num_classes)
 
         nn.init.xavier_uniform_(self.out.weight)
         nn.init.zeros_(self.out.bias)
@@ -81,11 +79,13 @@ class SimpleCNN(nn.Module):
         return x
 
 class Readout(nn.Module):
-    def __init__(self, input_dim=224, hidden_dim=32, num_classes=4, dropout=0.0, num_heads=1):
+    def __init__(self, input_dim=224, hidden_dim=32, num_classes=4, dropout=0.0, num_heads=1, num_preR=3, preR_dim=32):
         super(Readout, self).__init__()
         self.hidden_dim = hidden_dim
         self.input_dim = input_dim
         self.num_classes = num_classes
+        self.num_preR = num_preR
+        self.preR_dim = preR_dim
         self.dropout = 0
 
         self.num_heads = num_heads
@@ -94,12 +94,12 @@ class Readout(nn.Module):
         else:
             self.multi_head = False
         
-        self.batch_norm = nn.BatchNorm1d(128*3, affine=False)  
-        self.fc0 = nn.Linear(128*3, self.hidden_dim)
+        self.batch_norm = nn.BatchNorm1d(self.preR_dim*self.num_preR, affine=False)  
+        self.fc0 = nn.Linear(self.preR_dim*self.num_preR, self.hidden_dim)
         nn.init.kaiming_normal_(self.fc0.weight, nonlinearity='linear')
         nn.init.zeros_(self.fc0.bias)
         
-        self.fc1 = nn.Linear(self.num_classes*3 + self.hidden_dim, self.hidden_dim*2)
+        self.fc1 = nn.Linear(self.num_classes*self.num_preR + self.hidden_dim, self.hidden_dim*2)
         nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='leaky_relu')
         nn.init.zeros_(self.fc1.bias)
         
@@ -108,18 +108,17 @@ class Readout(nn.Module):
         nn.init.zeros_(self.fc2.bias)
 
         if self.multi_head:
-            self.attn_embed = nn.Linear(self.num_classes*3, self.hidden_dim*self.num_heads)
+            self.attn_embed = nn.Linear(self.num_classes*self.num_preR, self.hidden_dim*self.num_heads)
             self.multihead_attn = nn.MultiheadAttention(self.num_heads*self.hidden_dim, self.num_heads, dropout=self.dropout, batch_first=True)
-            self.attn_out = nn.Linear(self.num_heads*self.hidden_dim, self.num_classes*3)
+            self.attn_out = nn.Linear(self.num_heads*self.hidden_dim, self.num_classes*self.num_preR)
         else:
-            self.attn_embed = nn.Linear(self.num_classes*3, self.hidden_dim)
-            self.attn_out = nn.Linear(self.hidden_dim, self.num_classes*3)
+            self.attn_embed = nn.Linear(self.num_classes*self.num_preR, self.hidden_dim)
+            self.attn_out = nn.Linear(self.hidden_dim, self.num_classes*self.num_preR)
             
     def input(self, ind_embeds):
         embed = self.batch_norm(ind_embeds)
         embed = self.fc0(embed)
         return embed
-        
         
     def forward(self, logits, ind_embeds):
         x = self.attn_embed(logits)
