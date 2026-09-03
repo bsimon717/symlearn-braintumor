@@ -10,11 +10,10 @@ from pathlib import Path
 from model import SimpleCNN, Readout
 from torchvision import models, transforms
 from torchvision.datasets import ImageFolder
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch.optim as optim
-from sklearn.metrics import accuracy_score
 import torch.multiprocessing as multiprocessing
+from sklearn.metrics import accuracy_score
 
 def epoch_summary(reports, epoch, tags, label_lookup):
     print(f'Summary:')
@@ -93,8 +92,11 @@ def train_one_epoch(train_loader, models, opts, scheds, collab_params, temp, epo
 
         img = img.to(device)
 
-        ind_concat = torch.cat([model.embed(img) for model in models[:-1]], dim=1)
+        inds = [model.embed(img) for model in models[:-1]]
         
+        ind_concat = torch.cat(inds, dim=1)
+        ind_stack = torch.stack(inds)
+    
         logits_list = [model(ind_concat.clone()).clone().cpu() for model in models[:-1]]
         
         probs_list = [F.softmax(logits.clone().detach(),dim=-1).to('cpu') for logits in logits_list]
@@ -107,8 +109,8 @@ def train_one_epoch(train_loader, models, opts, scheds, collab_params, temp, epo
             L_is.append(L_i)
             personal.append(float(L_i.clone().detach()))
 
-            src = ind_concat[i].clone()
-            auxs = [ind_concat[i].clone() for i in range(len(ind_concat))]
+            src = ind_stack[i].clone()
+            auxs = [ind_stack[i].clone() for i in range(len(ind_stack))]
             auxs.pop(i)
             L_emb_i = embed_loss(src, auxs).cpu()
             L_emb_is.append(L_emb_i)
@@ -197,7 +199,8 @@ def eval_one_epoch(eval_loader, models, collab_params, temp, epoch, criterion, u
     
     for model in models:
         model.eval()
-
+        model.to(device)
+        
     all_labels = []
     
     ## VALIDATION LOOP
@@ -208,8 +211,12 @@ def eval_one_epoch(eval_loader, models, collab_params, temp, epoch, criterion, u
     
             img = img.to(device)
             all_labels += label.tolist()
+
+            inds = [model.embed(img) for model in models[:-1]]
             
-            ind_concat = torch.cat([model.embed(img) for model in models[:-1]], dim=1)
+            ind_concat = torch.cat(inds, dim=1)
+            ind_stack = torch.stack(inds)
+            
             logits_list = [model(ind_concat.clone()).clone().cpu() for model in models[:-1]]
             
             probs_list = [F.softmax(logits.clone(),dim=-1).to('cpu') for logits in logits_list]
@@ -224,8 +231,8 @@ def eval_one_epoch(eval_loader, models, collab_params, temp, epoch, criterion, u
 
                 preds[i] += preds_list[i]
                 
-                src = ind_concat[i].clone()
-                auxs = [ind_concat[i].clone() for i in range(len(ind_concat))]
+                src = ind_stack[i].clone()
+                auxs = [ind_stack[i].clone() for i in range(len(ind_stack))]
                 auxs.pop(i)
                 L_emb_i = embed_loss(src, auxs).cpu()
                 L_emb_is.append(L_emb_i)

@@ -386,9 +386,9 @@ def main():
         assert load_path != False, 'Option load_at_uplift is set to True without a load_path specified.'
         print('Loading pre-trained models. Training will begin at uplift.')
 
-        for i in range(num):
+        for i in range(num_preR):
             check = torch.load(f'{load_path}/Model_{i}_pre-uplift.pt', map_location=torch.device('cpu'))
-            models[i].load_state_dict(check['models'])
+            models[i].load_state_dict(check['model'])
             opts[i].load_state_dict(check['opt'])
             scheds[i].load_state_dict(check['sched'])
         
