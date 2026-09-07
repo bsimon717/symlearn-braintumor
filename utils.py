@@ -59,13 +59,10 @@ def embed_loss(src, auxs):
     temp_func = torch.vmap(temp_func)
 
     auxs = torch.stack(auxs)
-
     sum_terms = temp_func(auxs)
-
     sum_terms = torch.sum(sum_terms, dim=0)
-
     pre_factor = 1/num_aux
-
+    
     L_embed = pre_factor*sum_terms
 
     return L_embed.mean()
