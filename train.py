@@ -10,8 +10,12 @@ import math
 import json
 import argparse
 
-from model import SimpleCNN, Readout
+from model import SimpleCNN
 from utils import *
+
+from symlearn.loss import *
+from symlearn.classify.Readout import Readout
+from symlearn.classify.utils import *
 
 def train(epochs, models, opts, scheds, data_loaders, collab_params, temp, criterion, uplift=10, eps=1e-7, lamb=1.0):
     
