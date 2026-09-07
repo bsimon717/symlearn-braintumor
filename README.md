@@ -7,17 +7,20 @@ All details regarding the dataset can be found [here](https://www.kaggle.com/dat
 # Instructions
 
 First, run the following to retrieve the symbiotic-learning package and create the logs directory:
-`git clone https://github.com/bsimon717/symbiotic-learning.git`
+`git clone https://github.com/bsimon717/symlearn.git`
+
 `mkdir sym_logs`
 
 Hyperparameters can be specified using command-line arguments (run `python train.py --help` to see the full list) or with a `config.json` file.
 
 To generate a configuration file, run the following:
+
 `python train.py -n 3 -c 0.5 0.5 0.5 -o True --comment='default'`
 
 This will generate a config.json file in the relevant log directory, the path to which will be printed to the terminal.
 
 To start a training with a configuration file, run:
+
 `python train.py --config_path=PATH/TO/CONFIG`
 
 To save the state directories of pre-Readout models BEFORE uplift, use the `--save_before_uplift` flag.
