@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch.nn.utils.prune as prune
 import optuna
-from model import SimpleCNN, Readout
 from sklearn.metrics import accuracy_score
 import json
 from torch.utils.data import DataLoader
@@ -15,6 +14,11 @@ import torch.multiprocessing as multiprocessing
 from copy import deepcopy
 
 from utils import *
+from model import SimpleCNN
+
+from symlearn.loss import *
+from symlearn.classify.Readout import Readout
+from symlearn.classify.utils import *
 
 def main():
     global models
@@ -77,7 +81,7 @@ def main():
     else:
         raise Exception(f'Unsupported Criterion: {crit}')
 
-    _, val_loader, test_loader = get_data_loaders(batch_size)
+    _, val_loader, _ = get_data_loaders(batch_size)
 
     models = []
 
@@ -154,9 +158,6 @@ def objective(trial):
     readout_acc = valid_reports[-1]['accuracy']
     
     return np.mean(prune_percs), readout_acc
-
-def count_nonzero_parameters(model):
-    return sum((p != 0).sum().item() for p in model.parameters())
 
 def prune_preReadout(model, amount):
     for name, module in model.named_modules():
