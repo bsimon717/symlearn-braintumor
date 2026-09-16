@@ -1,45 +1,10 @@
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from PIL import Image
 from pathlib import Path
-from torchvision import models, transforms
+from torchvision import transforms
 from torchvision.datasets import ImageFolder
-from tqdm import tqdm
-
-import torch.multiprocessing as multiprocessing
-from sklearn.metrics import accuracy_score
-
-def epoch_summary(reports, epoch, tags, label_lookup):
-    print(f'Summary:')
-    for i, report in enumerate(reports):
-        tag = tags[i]
-
-        print(f'\t- {tag}:')
-        for label in report.keys():
-            if report[label] == None:
-                continue
-            else:
-                if label != 'accuracy':
-                    print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
-                else:
-                    print()
-                    print(f'\t\t-- {label_lookup[label]}: {report[label]:.4}')
-        print()
-
-    return
-
-def fill_lt_reports(lt_reports, reports, phase):
-
-    for lt_report, report in zip(lt_reports, reports):
-            keys = list(report.keys())
-            for key in keys:
-                if key not in lt_report[phase].keys():
-                    lt_report[phase][key] = [report[key]]
-                else:
-                    lt_report[phase][key].append(report[key])
-                    
-    return
-
 
 def get_data_loaders(batch_size):
 

@@ -1,9 +1,10 @@
 import argparse
+import pandas as pd
 from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from model import SimpleCNN, Readout
+import torch.nn.utils.prune as prune
 from sklearn.metrics import accuracy_score
 import json
 from torch.utils.data import DataLoader
@@ -11,25 +12,33 @@ from sklearn.metrics import accuracy_score
 from tqdm import tqdm
 import torch.multiprocessing as multiprocessing
 from copy import deepcopy
-import numpy as np
 
 from utils import *
+from model import SimpleCNN
+from bayesian_pruning import prune_preReadout
+
+from symlearn.loss import *
+from symlearn.classify.Readout import Readout
+from symlearn.classify.utils import *
+
+def count_nonzero_parameters(model):
+    return sum((p != 0).sum().item() for p in model.parameters() if p.requires_grad)
 
 def main():
-    global device
-    global tags
-    
     device = torch.device("cuda")
-    torch.manual_seed(717)
-    
-    parser = argparse.ArgumentParser(prog='importance',
-                    description='importance.py',
+        
+    parser = argparse.ArgumentParser(prog='test_pruned',
+                    description='test_pruned.py',
                     epilog='Full description TBD.')
-
+    
     parser.add_argument('--load_path', default=False, type=str, help='Path to folder containing pre-trained models.')
+    parser.add_argument('--trial', type=int, help='Trial number of bayesian optimization.')
+    parser.add_argument('--save', type=bool, default=False, help='Save pruned models.')
     
     args = parser.parse_args()
     load_path = args.load_path
+    trial = args.trial
+    save = args.save
     
     print(f'Loading settings from path {load_path}')
     with open(f'{load_path}/config.json', 'r') as file:
@@ -52,6 +61,13 @@ def main():
     num_fc = config['models']['pre-Readout']['num_fc']
 
     tags = [f'Model_{i}' for i in range(num_preR)] + ['Readout']
+
+    label_lookup = {}
+    label_lookup['personal'] = 'Average Personal Loss'
+    label_lookup['symbiotic'] = 'Average Symbiotic Loss'
+    label_lookup['accuracy'] = 'Accuracy'
+    label_lookup['embedding'] = 'Average Embedding Loss'
+    label_lookup['blame'] = 'Average Blame Loss'
     
     torch.cuda.empty_cache()
 
@@ -66,6 +82,7 @@ def main():
 
     for _ in range(num_preR):
         model_i = SimpleCNN(kernel_size=kernel_size, kernel_stride=kernel_stride, conv_channels=conv_channels, out_channels=out_channels, padding=1, num_fc=num_fc, num_preR=num_preR)
+
         models.append(model_i)
 
     print('Loading pre-trained models.')
@@ -78,41 +95,50 @@ def main():
     readout_check = torch.load(f'{load_path}/Readout.pt', map_location=torch.device('cpu'))
     models[-1].load_state_dict(readout_check['model'])
 
-    importance(models, collab_params, val_loader, criterion, temp, lamb)
-
-def importance(models, collab_params, eval_loader, criterion, temp, lamb):
-    frac_changes = []
-    init_models_clone = [deepcopy(model).to(device) for model in models]
-    init_valid_reports = eval_one_epoch(eval_loader, init_models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
-
-    del init_models_clone
+    num_before_prune = 0
+    for model in models:
+        num_before_prune += count_nonzero_parameters(model)
     
-    init_readout_acc = init_valid_reports[-1]['accuracy']
+    models_clone = [deepcopy(model).to(device) for model in models]
     
-    for i in range(len(models[:-1])):
-        models_clone = [deepcopy(model).to(device) for model in models]
-        
-        for layer in models_clone[i].children():
-           if hasattr(layer, 'reset_parameters'):
-               layer.reset_parameters()
+    study = pd.read_json(f'{load_path}/all_trials.json')
+    
+    for i in range(num_preR):
+        perc = study.iloc[trial][f"params_Model_{i} Unstructured Pruning Percentage"]    
+        prune_preReadout(models_clone[i], perc)
 
-        post_valid_reports = eval_one_epoch(eval_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
-        post_readout_acc = post_valid_reports[-1]['accuracy']
+    valid_reports = eval_one_epoch(val_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
+    torch.cuda.empty_cache()
+    
+    epoch_summary(valid_reports, 999, tags, label_lookup)
 
-        frac_change = abs((post_readout_acc-init_readout_acc)/init_readout_acc)
-        frac_changes.append(frac_change)
-        
-        torch.cuda.empty_cache()
+    test_reports = eval_one_epoch(test_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Testing')
+    torch.cuda.empty_cache()
+    
+    epoch_summary(test_reports, 999, tags, label_lookup)
 
-        del models_clone
+    num_unpruned = 0
 
-    rankings = list(np.argsort(frac_changes))
-    rankings.reverse()
+    for model in models_clone:
+        num_unpruned += count_nonzero_parameters(model)
 
-    print('Pre-Readout Model Importance:')
-    for rank, i in enumerate(rankings):
-        print(f'\t{rank+1}) Model_{i}: {frac_changes[i]:.4f}')
+    print(f'Total Parameters Before Pruning: {num_before_prune}')
+    print(f'Total Parameters After Pruning: {num_unpruned}')
 
+    if save:
+        for i, model in enumerate(models_clone):
+            tag = tags[i]
+            
+            checkpoint = {
+                'model': model.state_dict(),
+            }
+            
+            torch.save(checkpoint, f'{save_path}/{tag}_pruned.pt')
+            
+    return
+    
 if __name__ == "__main__":
     multiprocessing.set_start_method('spawn')
     main()
+
+    
