@@ -10,7 +10,8 @@ import json
 import argparse
 
 from model import SimpleCNN
-from utils import *
+from utils import get_data_loaders
+from symlearn.loss import *
 from symlearn.classify.Readout import Readout
 from symlearn.classify.utils import *
     
@@ -83,7 +84,8 @@ def main():
     collab_params = args.collab_params
     
     only_create_json = args.only_create_json
-    
+
+    comment = args.comment
     save_end = args.save_end
     save_before_uplift = args.save_before_uplift
     save_best = args.save_best
@@ -93,13 +95,6 @@ def main():
 
     if load_at_uplift:
         assert load_path!= False, 'Must specify load_path if load_before_uplift is enabled.'
-        
-    if args.comment != '':
-        save_path = f'./sym_logs/{date_and_time}_{args.comment}'
-    else:
-        save_path = f'./sym_logs/{date_and_time}'
-        
-    os.mkdir(save_path)
 
     config_path = args.config_path
     crit = args.criterion
@@ -117,7 +112,14 @@ def main():
     num_fc = args.num_fc
     temp = args.temp
     lamb = args.lamb
+    
+    if comment != '':
+        save_path = f'./sym_logs/{date_and_time}_{comment}'
+    else:
+        save_path = f'./sym_logs/{date_and_time}'
 
+    os.mkdir(save_path)
+    
     if config_path == False:
         assert epochs > 0, 'Must specify non-zero number of epochs.'
         assert uplift <= epochs, 'Uplift must be less than or equal to the total number of epochs.'
@@ -215,10 +217,6 @@ def main():
 
         with open(f"{save_path}/config.json", "w") as file:
             json.dump(config, file, indent=4, sort_keys=True)
-
-    tags = [f'Model_{i}' for i in range(num_preR)] + ['Readout']
-    for tag in tags:
-        os.mkdir(f'{save_path}/{tag}')
         
     device = torch.device("cuda")
     torch.cuda.empty_cache()
@@ -279,7 +277,7 @@ def main():
         file.write(f"\t\t-Number of Trainable Parameters per pre-Readout Model: {num_trainable_params}\n")
         file.write(f"\tNumber of Trainable Parameters in Readout Block: {num_trainable_params_readout}")
     
-    train(epochs, models, opts, scheds, data_loaders, collab_params, temp, criterion, uplift=uplift, lamb=lamb)
+    train(epochs, models, opts, scheds, data_loaders, collab_params, temp, criterion, uplift=uplift, lamb=lamb, save_best=save_best, save_end=save_end, save_before_uplift=save_before_uplift, save_path=save_path)
     print('Exiting.')
     return
 
