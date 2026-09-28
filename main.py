@@ -58,6 +58,7 @@ def main():
     parser.add_argument('--out_channels', default=128, type=int)
     parser.add_argument('--readout_hidden_dim', default=32, type=int)
     parser.add_argument('--readout_num_hidden', default=1, type=int)
+    parser.add_argument('--attn_dropout', default=0.0, type=float)
     parser.add_argument('--num_heads', default=1, type=int)
     parser.add_argument('--num_fc', default=3, type=int)
     parser.add_argument('--temp', default=1.0, type=float)
@@ -111,6 +112,7 @@ def main():
     out_channels = args.out_channels
     readout_hidden_dim = args.readout_hidden_dim
     readout_num_hidden = args.readout_num_hidden
+    attn_dropout = args.attn_dropout
     num_heads = args.num_heads
     num_fc = args.num_fc
     temp = args.temp
@@ -164,6 +166,7 @@ def main():
         config['models']['Readout']['readout_hidden_dim'] = readout_hidden_dim
         config['models']['Readout']['readout_num_hidden'] = readout_num_hidden
         config['models']['Readout']['num_heads'] = num_heads
+        config['models']['Readout']['attn_dropout'] = attn_dropout
         
         # Open file in write mode ('w')
         with open(f"{save_path}/config.json", "w") as file:
@@ -191,7 +194,8 @@ def main():
         readout_hidden_dim = config['models']['Readout']['readout_hidden_dim']
         readout_num_hidden = config['models']['Readout']['readout_num_hidden']
         num_heads = config['models']['Readout']['num_heads']
-
+        attn_dropout = config['models']['Readout']['attn_dropout']
+        
         if not load_at_uplift:
             num_preR = config['models']['pre-Readout']['num_preR']
             collab_params = config['models']['pre-Readout']['collab_params']
@@ -260,7 +264,7 @@ def main():
             scheds[i].load_state_dict(check['sched'])
         
     num_trainable_params = sum(p.numel() for p in models[0].parameters() if p.requires_grad)
-    readout = Readout(hidden_dim=readout_hidden_dim, num_heads=num_heads, num_preR=num_preR, preR_dim=out_channels, num_hidden=readout_num_hidden).to(device)
+    readout = Readout(hidden_dim=readout_hidden_dim, num_heads=num_heads, num_preR=num_preR, preR_dim=out_channels, num_hidden=readout_num_hidden, attn_dropout=attn_dropout).to(device)
     models.append(readout)
     opt_F = optim.AdamW(models[-1].parameters(), lr=1e-7, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
     opts.append(opt_F)
