@@ -6,14 +6,15 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 import json
 import argparse
 
+from symlearn.classify.readout import Readout
+import symlearn.classify.utils as classify
+
 from model import SimpleCNN
 from utils import get_data_loaders
-from symlearn.loss import *
-from symlearn.classify.Readout import Readout
-from symlearn.classify.utils import *
     
 def main():
     now = datetime.now()
@@ -56,6 +57,7 @@ def main():
     parser.add_argument('--conv_channels', default=32, type=int)
     parser.add_argument('--out_channels', default=128, type=int)
     parser.add_argument('--readout_hidden_dim', default=32, type=int)
+    parser.add_argument('--readout_num_hidden', default=1, type=int)
     parser.add_argument('--num_heads', default=1, type=int)
     parser.add_argument('--num_fc', default=3, type=int)
     parser.add_argument('--temp', default=1.0, type=float)
@@ -108,6 +110,7 @@ def main():
     conv_channels = args.conv_channels
     out_channels = args.out_channels
     readout_hidden_dim = args.readout_hidden_dim
+    readout_num_hidden = args.readout_num_hidden
     num_heads = args.num_heads
     num_fc = args.num_fc
     temp = args.temp
@@ -159,6 +162,7 @@ def main():
         config['models']['pre-Readout']['num_fc'] = num_fc
 
         config['models']['Readout']['readout_hidden_dim'] = readout_hidden_dim
+        config['models']['Readout']['readout_num_hidden'] = readout_num_hidden
         config['models']['Readout']['num_heads'] = num_heads
         
         # Open file in write mode ('w')
@@ -185,6 +189,7 @@ def main():
         crit = config['training']['criterion']
         
         readout_hidden_dim = config['models']['Readout']['readout_hidden_dim']
+        readout_num_hidden = config['models']['Readout']['readout_num_hidden']
         num_heads = config['models']['Readout']['num_heads']
 
         if not load_at_uplift:
@@ -255,7 +260,7 @@ def main():
             scheds[i].load_state_dict(check['sched'])
         
     num_trainable_params = sum(p.numel() for p in models[0].parameters() if p.requires_grad)
-    readout = Readout(hidden_dim=readout_hidden_dim, num_heads=num_heads, num_preR=num_preR, preR_dim=out_channels).to(device)
+    readout = Readout(hidden_dim=readout_hidden_dim, num_heads=num_heads, num_preR=num_preR, preR_dim=out_channels, num_hidden=readout_num_hidden).to(device)
     models.append(readout)
     opt_F = optim.AdamW(models[-1].parameters(), lr=1e-7, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)
     opts.append(opt_F)
@@ -277,7 +282,7 @@ def main():
         file.write(f"\t\t-Number of Trainable Parameters per pre-Readout Model: {num_trainable_params}\n")
         file.write(f"\tNumber of Trainable Parameters in Readout Block: {num_trainable_params_readout}")
     
-    train(epochs, models, opts, scheds, data_loaders, collab_params, temp, criterion, uplift=uplift, lamb=lamb, save_best=save_best, save_end=save_end, save_before_uplift=save_before_uplift, save_path=save_path)
+    classify.train(epochs, models, opts, scheds, data_loaders, collab_params, temp, criterion, uplift=uplift, lamb=lamb, save_best=save_best, save_end=save_end, save_before_uplift=save_before_uplift, save_path=save_path)
     print('Exiting.')
     return
 
