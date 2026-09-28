@@ -53,6 +53,7 @@ class SimpleCNN(nn.Module):
         x = self.pool(x)
 
         x = torch.flatten(x, 1) 
+
         x = self.fc(x)
         x = F.leaky_relu(x)
 
