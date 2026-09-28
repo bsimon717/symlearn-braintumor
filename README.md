@@ -28,3 +28,5 @@ To save the state directories of pre-Readout models BEFORE uplift, use the `--sa
 To save all models at the end of training, use the `--save_end` flag.
 
 To start a training AT uplift, use both of the `--load_at_uplift` and `--load_path` arguments.
+
+To save the best-performing epoch (after uplift), use the `--save_best` flag.
