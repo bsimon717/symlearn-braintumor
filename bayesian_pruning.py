@@ -1,24 +1,22 @@
 import argparse
-from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 import torch.nn.utils.prune as prune
 import optuna
-from sklearn.metrics import accuracy_score
 import json
-from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score
-from tqdm import tqdm
 import torch.multiprocessing as multiprocessing
 from copy import deepcopy
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score
+from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score
 
-from utils import *
-from model import SimpleCNN
-
-from symlearn.loss import *
+import symlearn.classify.utils as classify
 from symlearn.classify.Readout import Readout
-from symlearn.classify.utils import *
+
+from utils import get_data_loaders
+from model import SimpleCNN
 
 def main():
     global models
@@ -150,10 +148,10 @@ def objective(trial):
 
         prune_preReadout(models_clone[i], x)
         
-    valid_reports = eval_one_epoch(val_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
+    valid_reports = classify.eval_one_epoch(val_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
     torch.cuda.empty_cache()
     
-    epoch_summary(valid_reports, 999, tags, label_lookup)
+    classify.reports_summary(valid_reports, 999, tags, label_lookup)
 
     readout_acc = valid_reports[-1]['accuracy']
     

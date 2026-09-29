@@ -3,7 +3,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SimpleCNN(nn.Module):
-    def __init__(self, input_dim=224, num_classes=4, kernel_size=4, kernel_stride=4, in_channels=1, conv_channels=8, out_channels=128, padding=0, hidden_dim=128, num_fc=1, num_preR=3):
+    def __init__(self, 
+                 input_dim: int = 224, 
+                 num_classes: int = 4, 
+                 kernel_size: int = 4, 
+                 kernel_stride: int = 4, 
+                 in_channels: int = 1, 
+                 conv_channels: int = 8, 
+                 out_channels: int = 128, 
+                 padding: int = 0, 
+                 hidden_dim: int = 128,
+                 num_fc: int = 1, 
+                 num_preR: int = 3):
+        
         super(SimpleCNN, self).__init__()
 
         self.input_dim = input_dim

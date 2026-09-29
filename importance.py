@@ -1,19 +1,23 @@
 import argparse
-from tqdm import tqdm
+from typing import List
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
-from model import SimpleCNN, Readout
-from sklearn.metrics import accuracy_score
+import torch.multiprocessing as multiprocessing
 import json
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score
 from tqdm import tqdm
-import torch.multiprocessing as multiprocessing
 from copy import deepcopy
-import numpy as np
+from torch.nn import Module
+from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score
 
-from utils import *
+import symbiotic_learning.classify.utils as classify
+
+from model import SimpleCNN
+from utils import get_data_loaders
 
 def main():
     global device
@@ -80,10 +84,17 @@ def main():
 
     importance(models, collab_params, val_loader, criterion, temp, lamb)
 
-def importance(models, collab_params, eval_loader, criterion, temp, lamb):
+def importance(
+    models: List[Module], 
+    collab_params: List[float], 
+    eval_loader: DataLoader, 
+    criterion: Module, 
+    temp: float, 
+    lamb: float) -> None:
+
     frac_changes = []
     init_models_clone = [deepcopy(model).to(device) for model in models]
-    init_valid_reports = eval_one_epoch(eval_loader, init_models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
+    init_valid_reports = classify.eval_one_epoch(eval_loader, init_models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
 
     del init_models_clone
     
@@ -96,7 +107,7 @@ def importance(models, collab_params, eval_loader, criterion, temp, lamb):
            if hasattr(layer, 'reset_parameters'):
                layer.reset_parameters()
 
-        post_valid_reports = eval_one_epoch(eval_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
+        post_valid_reports = classify.eval_one_epoch(eval_loader, models_clone, collab_params, temp, 999, criterion, lamb=lamb, phase='Validation')
         post_readout_acc = post_valid_reports[-1]['accuracy']
 
         frac_change = abs((post_readout_acc-init_readout_acc)/init_readout_acc)
@@ -112,6 +123,8 @@ def importance(models, collab_params, eval_loader, criterion, temp, lamb):
     print('Pre-Readout Model Importance:')
     for rank, i in enumerate(rankings):
         print(f'\t{rank+1}) Model_{i}: {frac_changes[i]:.4f}')
+
+    return
 
 if __name__ == "__main__":
     multiprocessing.set_start_method('spawn')

@@ -4,20 +4,31 @@ This is a project meant to prototype the *symbiotic learning* paradigm using a b
 
 All details regarding the dataset can be found [here](https://www.kaggle.com/datasets/mylee77/brain-tumor-mri-deduplicated-clean-version).
 
-# Instructions
+---
 
+# Instructions
+## Install Package and Download Dataset
 First, run the following to retrieve the symbiotic-learning package and create the logs directory:
-`git clone https://github.com/bsimon717/symlearn.git`
+
+`pip install symbiotic-learning`
 
 `mkdir sym_logs`
 
-Hyperparameters can be specified using command-line arguments (run `python train.py --help` to see the full list) or with a `config.json` file.
+Then, run the following to download the brain tumor dataset:
+
+`python download_kaggle_dataset.py`
+
+---
+
+## Run Training
+
+Hyperparameters can be specified using command-line arguments (run `python main.py --help` to see the full list) or with a `config.json` file.
 
 To generate a configuration file, run the following:
 
 `python main.py -n 3 -c 0.5 0.5 0.5 -o True --comment='default'`
 
-This will generate a config.json file in the relevant log directory, the path to which will be printed to the terminal.
+This will generate a generic config.json file in the `sym_logs` directory, the path to which will be printed to the terminal.
 
 To start a training with a configuration file, run:
 

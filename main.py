@@ -10,8 +10,8 @@ import torch.optim as optim
 import json
 import argparse
 
-from symlearn.classify.readout import Readout
-import symlearn.classify.utils as classify
+from symbiotic_learning.classify.readout import Readout
+import symbiotic_learning.classify.utils as classify
 
 from model import SimpleCNN
 from utils import get_data_loaders
