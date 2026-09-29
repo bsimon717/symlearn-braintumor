@@ -1,0 +1,32 @@
+{
+    "models": {
+        "Readout": {
+            "attn_dropout": 0.0,
+            "num_heads": 4,
+            "readout_hidden_dim": 32,
+            "readout_num_hidden": 2
+        },
+        "pre-Readout": {
+            "collab_params": [
+                0.75,
+                0.75,
+                0.75,
+                0.75
+            ],
+            "conv_channels": 16,
+            "kernel_size": 16,
+            "kernel_stride": 2,
+            "num_fc": 6,
+            "num_preR": 4,
+            "out_channels": 128
+        }
+    },
+    "training": {
+        "batch_size": 32,
+        "criterion": "CE",
+        "epochs": 300,
+        "lamb": 10.0,
+        "temp": 6.0,
+        "uplift": 50
+    }
+}
