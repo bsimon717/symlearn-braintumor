@@ -14,6 +14,12 @@ First, run the following to retrieve the symbiotic-learning package and create t
 
 `mkdir sym_logs`
 
+To instead install pytorch with CUDA enabled, use
+
+```
+pip install symbiotic-learning --extra-index-url https://download.pytorch.org/whl/cu132
+```
+
 Then, run the following to download the brain tumor dataset:
 
 `python download_kaggle_dataset.py`
